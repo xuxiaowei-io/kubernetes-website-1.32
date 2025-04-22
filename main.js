@@ -7,6 +7,8 @@ import log from 'electron-log'
 import Store from 'electron-store'
 import fs from 'fs/promises'
 
+import './ipc-main.js'
+import './menu.js'
 import './updater.js'
 
 const store = new Store()
@@ -26,6 +28,10 @@ log.transports.file.fileName = 'main.log'
 log.scope.defaultLabel = 'main'
 log.scope.labelPadding = 8
 
+const disableHttp = log.create({ logId: 'disableHttp' })
+disableHttp.transports.file.fileName = 'disableHttp.log'
+disableHttp.scope.defaultLabel = 'disableHttp'
+
 log.info('Hello from Electron 👋')
 
 // 创建一个新的日志记录器
@@ -39,6 +45,25 @@ if (typeof devTools !== 'boolean') {
   store.set('devTools', process.env.NODE_ENV === 'development')
 }
 
+const languageFeatures = {
+  'en-US': 'dist/index.html', // 英语（主版本）
+  bn: 'dist/bn/index.html', // 孟加拉语
+  'zh-CN': 'dist/zh-cn/index.html', // 简体中文
+  fr: 'dist/fr/index.html', // 法语
+  de: 'dist/de/index.html', // 德语
+  hi: 'dist/hi/index.html', // 印地语
+  id: 'dist/id/index.html', // 印尼语
+  it: 'dist/it/index.html', // 意大利语
+  ja: 'dist/ja/index.html', // 日语
+  ko: 'dist/ko/index.html', // 韩语
+  pl: 'dist/pl/index.html', // 波兰语
+  'pt-BR': 'dist/pt-br/index.html', // 巴西葡萄牙语
+  ru: 'dist/ru/index.html', // 俄语
+  es: 'dist/es/index.html', // 西班牙语
+  uk: 'dist/uk/index.html', // 乌克兰语
+  vi: 'dist/vi/index.html', // 越南语
+}
+
 // Windows 开发：C:\Users\%USERPROFILE%\AppData\Roaming\Electron\config.json
 // Windows 安装：C:\Users\%USERPROFILE%\AppData\Roaming\项目名称\config.json
 // macOS 开发：/Users/$USER/Library/Application Support/Electron/config.json
@@ -49,17 +74,46 @@ if (typeof devTools !== 'boolean') {
 // Linux 安装 *.snap：~/snap/项目名/x1/.config/项目名/config.json
 log.info('electron-store path', store.path)
 
+// 定义一个方法，拒绝所有 http、https 协议
+const diableHttp = function() {
+
+  // 拦截所有 http 请求
+  protocol.handle('http', (request, callback) => {
+    disableHttp.log('http: ' + request.url)
+    callback({
+      // 直接返回 403 禁止访问
+      statusCode: 403,
+      data: null
+    })
+  })
+
+  // 拦截所有 https 请求
+  protocol.handle('https', (request, callback) => {
+    disableHttp.log('https: ' + request.url)
+    callback({
+      // 直接返回 403 禁止访问
+      statusCode: 403,
+      data: null
+    })
+  })
+}
+
 // 协议名称，自定义
-const scheme = 'vvt'
+const scheme = 'k8s-website-v1-32'
 
 // 新增协议注册函数
 const registerProtocol = () => {
   protocol.handle(scheme, async (request) => {
     const url = request.url
-    const parsedUrl = url.substring(scheme.length + 3).replace(/^(\.\.(\/|\\|$))+/, '')
+    const parsedUrl = url
+      .substring(scheme.length + 3)
+      .split('?')[0]
+      .replace(/^(\.\.(\/|\\|$))+/, '')
     const requestedPath = path.join(__dirname, parsedUrl)
-    const normalizedPath = path.normalize(requestedPath)
-
+    let normalizedPath = path.normalize(requestedPath)
+    if (normalizedPath.endsWith(path.sep)) {
+      normalizedPath = path.join(normalizedPath, 'index.html')
+    }
     try {
       await fs.access(normalizedPath, fs.constants.R_OK)
       loader.info(
@@ -87,29 +141,28 @@ const createWindow = () => {
     },
   })
 
-  if (process.env.VITE_SERVER_URL) {
-    mainWindow.loadURL(process.env.VITE_SERVER_URL).catch((err) => {
-      log.error('mainWindow.loadURL', process.env.VITE_SERVER_URL, err)
-    })
+  let url = languageFeatures[app.getLocale()]
+  url = url === undefined ? languageFeatures['en-US'] : url
 
-    // Open the DevTools.
-    mainWindow.webContents.openDevTools()
-  } else {
-    // and load the index.html of the app.
-    mainWindow.loadURL(`${scheme}://dist/index.html`).catch((err) => {
-      log.error('mainWindow.loadURL', err)
-    })
-  }
+  // load the index.html of the app.
+  mainWindow.loadURL(`${scheme}://${url}`).catch((err) => {
+    log.error('mainWindow.loadURL', err)
+  })
 }
 
 // This method will be called when Electron has finished
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
 app.whenReady().then(() => {
-  // 只在生产环境注册协议
-  if (!process.env.VITE_SERVER_URL) {
-    registerProtocol()
+
+  // 使用参数控制是否开启 http 协议
+  const enableHttp = store.get('enableHttp')
+  if (enableHttp !== true) {
+    diableHttp()
+    store.set('enableHttp', false)
   }
+
+  registerProtocol()
 
   createWindow()
 
